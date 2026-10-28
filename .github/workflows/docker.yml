@@ -13,8 +13,10 @@ env:
 jobs:
   build-scan:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Récupérer le code
+        uses: actions/checkout@v4
 
       - name: Lint du Dockerfile
         uses: hadolint/hadolint-action@v3.1.0
@@ -23,15 +25,22 @@ jobs:
           failure-threshold: warning
 
       - name: Build de l'image
-        run: docker build --build-arg APP_VERSION=ci -t ${{ env.IMAGE }}:ci .
+        run: docker build --build-arg APP_VERSION=ci -t "${IMAGE}:ci" .
 
       - name: Tests dans le conteneur
-        run: docker run --rm ${{ env.IMAGE }}:ci python -m unittest -v
+        run: docker run --rm "${IMAGE}:ci" python -m unittest -v
+
+      - name: Préparer le template HTML Trivy
+        run: |
+          mkdir -p .trivy
+          curl -fsSL \
+            https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl \
+            -o .trivy/html.tpl
 
       - name: Rapport Trivy (JSON)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.IMAGE }}:ci
+          image-ref: ministatus:ci
           format: json
           output: trivy-report.json
           exit-code: "0"
@@ -39,19 +48,33 @@ jobs:
       - name: Rapport Trivy (HTML)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.IMAGE }}:ci
+          image-ref: ministatus:ci
           format: template
-          template: "@$HOME/.local/bin/trivy-bin/contrib/html.tpl"
+          template: "@/contrib/html.tpl"
           output: trivy-report.html
           exit-code: "0"
 
-      - name: Resume dans la page du run
+      - name: Résumé dans la page du run
         if: always()
+        shell: bash
         run: |
           echo "### Rapport Trivy" >> "$GITHUB_STEP_SUMMARY"
-          for s in CRITICAL HIGH MEDIUM; do
-            n=$(jq "[.Results[]?.Vulnerabilities[]? | select(.Severity==\"$s\")] | length" trivy-report.json)
-            echo "- $s : $n" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ ! -s trivy-report.json ]; then
+            echo "Le rapport JSON est absent ou vide." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! jq empty trivy-report.json >/dev/null 2>&1; then
+            echo "Le rapport JSON est invalide." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          for severity in CRITICAL HIGH MEDIUM; do
+            count=$(jq \
+              "[.Results[]?.Vulnerabilities[]? | select(.Severity == \"$severity\")] | length" \
+              trivy-report.json)
+            echo "- $severity : $count" >> "$GITHUB_STEP_SUMMARY"
           done
 
       - name: Publier les rapports
@@ -59,12 +82,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: trivy-reports
-          path: trivy-report.*
+          path: |
+            trivy-report.json
+            trivy-report.html
+          if-no-files-found: warn
 
       - name: Quality gate (HIGH et CRITICAL)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.IMAGE }}:ci
+          image-ref: ministatus:ci
           format: table
           severity: HIGH,CRITICAL
-          vuln-type: library
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: "1"
