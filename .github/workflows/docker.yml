@@ -38,12 +38,17 @@ jobs:
           output: trivy-report.json
           exit-code: "0"
 
+      - name: Télécharger le template HTML Trivy
+        run: |
+          mkdir -p contrib
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl -o contrib/html.tpl
+
       - name: Rapport Trivy (HTML)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ministatus:ci
           format: template
-          template: "@/contrib/html.tpl"
+          template: "@contrib/html.tpl"
           output: trivy-report.html
           exit-code: "0"
 
